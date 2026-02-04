@@ -1,4 +1,8 @@
-require('dotenv').config()
+// Carregar variáveis de ambiente baseado em NODE_ENV
+const path = require('path')
+const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development'
+require('dotenv').config({ path: path.resolve(__dirname, envFile) })
+
 const express = require('express')
 const cors = require('cors')
 const swaggerUi = require('swagger-ui-express')
@@ -9,10 +13,8 @@ const readline = require('readline')
 
 const app = express()
 const PORT = process.env.PORT || 3000
-
-// Variáveis de ambiente
-let AMBIENTE = 'dev'
-let BASE_URL = `http://localhost:${PORT}`
+const BASE_URL = process.env.API_URL || `http://localhost:${PORT}`
+const AMBIENTE = process.env.NODE_ENV || 'development'
 
 // Middlewares
 app.use(cors())
@@ -741,43 +743,10 @@ app.use((err, req, res, next) => {
   })
 })
 
-// Função para selecionar ambiente
-function selecionarAmbiente() {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout
-    })
-
-    console.log('\n[AMBIENTE] Selecione o ambiente de execucao:')
-    console.log('[1] Desenvolvimento (localhost)')
-    console.log('[2] Producao (agrosystemapp.com)\n')
-
-    rl.question('Digite 1 ou 2: ', (resposta) => {
-      rl.close()
-      
-      if (resposta.trim() === '2') {
-        AMBIENTE = 'prod'
-        BASE_URL = process.env.PROD_URL || 'https://agrosystemapp.com'
-        process.env.NODE_ENV = 'production'
-      } else {
-        AMBIENTE = 'dev'
-        BASE_URL = `http://localhost:${PORT}`
-        process.env.NODE_ENV = 'development'
-      }
-      
-      resolve()
-    })
-  })
-}
-
 // Iniciar servidor
 async function iniciarServidor() {
-  // Selecionar ambiente
-  await selecionarAmbiente()
-  
   // Configurar Swagger dinamicamente baseado no ambiente
-  const swaggerSpec = gerarSwaggerSpec(AMBIENTE, BASE_URL)
+  const swaggerSpec = gerarSwaggerSpec(AMBIENTE === 'production' ? 'prod' : 'dev', BASE_URL)
   app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
     customCss: '.swagger-ui .topbar { display: none }',
     customSiteTitle: 'AgroServer API Documentation'
@@ -803,6 +772,7 @@ async function iniciarServidor() {
   // 2. Verificar conexão com Asaas
   try {
     console.log('\n[2/2] Verificando conexao com API Asaas...')
+    console.log(`[DEBUG] ASAAS_API_KEY carregada: ${process.env.ASAAS_API_KEY ? process.env.ASAAS_API_KEY.substring(0, 20) + '...' : 'NAO ENCONTRADA'}`)
     await listarClientesAsaas({ limit: 1 })
     console.log('[OK] API Asaas conectada')
   } catch (error) {

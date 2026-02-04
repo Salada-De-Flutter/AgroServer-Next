@@ -18,7 +18,7 @@ module.exports = (ambiente = 'dev', baseUrl = 'http://localhost:3000') => {
           description: 'Servidor de desenvolvimento'
         },
         {
-          url: baseUrl.replace('http://localhost:3000', process.env.PROD_URL || 'https://agrosystemapp.com'),
+          url: baseUrl.replace('http://localhost:3000', 'https://api.agrosystemapp.com'),
           description: 'Servidor de produção'
         }
       ]
