@@ -1,12 +1,18 @@
 require('dotenv').config()
 const express = require('express')
 const cors = require('cors')
+const swaggerUi = require('swagger-ui-express')
+const gerarSwaggerSpec = require('./docs/swagger')
 const { Pool } = require('pg')
-const { listarClientesAsaas } = require('./services/asaas')
+const { listarClientesAsaas, listarParcelamentosAsaas, listarCobrancasAsaas } = require('./services/asaas')
 const readline = require('readline')
 
 const app = express()
 const PORT = process.env.PORT || 3000
+
+// Variáveis de ambiente
+let AMBIENTE = 'dev'
+let BASE_URL = `http://localhost:${PORT}`
 
 // Middlewares
 app.use(cors())
@@ -102,12 +108,12 @@ async function sincronizarClientes() {
   let totalSincronizados = 0
   let totalNovos = 0
   let totalAtualizados = 0
+  let totalDeletados = 0
   let hasMore = true
+  let clientesAsaasIds = new Set() // Para rastrear IDs que existem no Asaas
 
-  console.log('\n========================================')
-  console.log('[SYNC] Iniciando sincronizacao...')
-  console.log('[SYNC] Pressione qualquer tecla para cancelar')
-  console.log('========================================\n')
+  console.log('\n[SYNC] Iniciando sincronizacao...')
+  console.log('[SYNC] Pressione qualquer tecla para cancelar\n')
 
   try {
     while (hasMore && !cancelarSync) {
@@ -117,6 +123,9 @@ async function sincronizarClientes() {
       
       for (const clienteAsaas of dadosAsaas.data) {
         if (cancelarSync) break
+        
+        // Rastrear IDs que existem no Asaas
+        clientesAsaasIds.add(clienteAsaas.id)
         
         const clienteDb = converterClienteAsaasParaDb(clienteAsaas)
 
@@ -193,14 +202,36 @@ async function sincronizarClientes() {
       }
     }
 
+    // Após sincronizar todos os clientes, verificar quais foram deletados do Asaas
+    if (!cancelarSync) {
+      console.log('\n[SYNC] Verificando clientes deletados do Asaas...')
+      
+      // Buscar todos os clientes ativos no banco
+      const clientesDb = await pool.query(
+        'SELECT asaas_id, nome FROM clientes WHERE deletado = false'
+      )
+      
+      for (const clienteDb of clientesDb.rows) {
+        if (cancelarSync) break
+        
+        // Se o cliente existe no banco mas não foi encontrado no Asaas, marcar como deletado
+        if (!clientesAsaasIds.has(clienteDb.asaas_id)) {
+          await pool.query(
+            'UPDATE clientes SET deletado = true WHERE asaas_id = $1',
+            [clienteDb.asaas_id]
+          )
+          console.log(`  [DELETADO] ${clienteDb.nome} (ID: ${clienteDb.asaas_id}) - removido do Asaas`)
+          totalDeletados++
+        }
+      }
+    }
+
     if (cancelarSync) {
       console.log('\n[SYNC] Sincronizacao cancelada')
       console.log(`[SYNC] Processados ate cancelamento: ${totalSincronizados}`)
     } else {
-      console.log('\n========================================')
-      console.log('[SYNC] Sincronizacao concluida!')
-      console.log(`[SYNC] Total: ${totalSincronizados} | Novos: ${totalNovos} | Atualizados: ${totalAtualizados}`)
-      console.log('========================================\n')
+      console.log('\n[SYNC] Sincronizacao concluida!')
+      console.log(`[SYNC] Total: ${totalSincronizados} | Novos: ${totalNovos} | Atualizados: ${totalAtualizados} | Deletados: ${totalDeletados}\n`)
     }
   } catch (error) {
     console.error('[SYNC] Erro na sincronizacao:', error.message)
@@ -210,27 +241,467 @@ async function sincronizarClientes() {
   }
 }
 
+// Sincronização de Parcelamentos
+function converterParcelamentoAsaasParaDb(parcelamentoAsaas) {
+  return {
+    asaas_id: parcelamentoAsaas.id,
+    valor: parcelamentoAsaas.value,
+    valor_liquido: parcelamentoAsaas.netValue,
+    valor_parcela: parcelamentoAsaas.paymentValue,
+    numero_parcelas: parcelamentoAsaas.installmentCount,
+    forma_pagamento: parcelamentoAsaas.billingType,
+    data_pagamento: parcelamentoAsaas.paymentDate,
+    descricao: parcelamentoAsaas.description,
+    dia_vencimento: parcelamentoAsaas.expirationDay,
+    data_criacao_asaas: parcelamentoAsaas.dateCreated,
+    cliente_asaas_id: parcelamentoAsaas.customer,
+    payment_link: parcelamentoAsaas.paymentLink,
+    checkout_session: parcelamentoAsaas.checkoutSession,
+    url_comprovante: parcelamentoAsaas.transactionReceiptUrl,
+    cartao_ultimos_digitos: parcelamentoAsaas.creditCard?.creditCardNumber,
+    cartao_bandeira: parcelamentoAsaas.creditCard?.creditCardBrand,
+    cartao_token: parcelamentoAsaas.creditCard?.creditCardToken,
+    deletado: parcelamentoAsaas.deleted || false
+  }
+}
+
+async function sincronizarParcelamentos() {
+  if (sincronizacaoAtiva) {
+    console.log('[PARCELAMENTOS] Sincronizacao ja em andamento')
+    return
+  }
+
+  sincronizacaoAtiva = true
+  cancelarSync = false
+  
+  let offset = 0
+  const limit = 50
+  let totalSincronizados = 0
+  let totalNovos = 0
+  let totalAtualizados = 0
+  let hasMore = true
+
+  console.log('\n[PARCELAMENTOS] Iniciando sincronizacao...')
+  console.log('[PARCELAMENTOS] Pressione qualquer tecla para cancelar\n')
+
+  try {
+    while (hasMore && !cancelarSync) {
+      console.log(`[PARCELAMENTOS] Buscando no Asaas (offset: ${offset})...`)
+      const dadosAsaas = await listarParcelamentosAsaas({ offset, limit })
+      console.log(`[PARCELAMENTOS] Recebidos ${dadosAsaas.data.length} parcelamentos`)
+      
+      for (const parcelamentoAsaas of dadosAsaas.data) {
+        if (cancelarSync) break
+        
+        const parcelamentoDb = converterParcelamentoAsaasParaDb(parcelamentoAsaas)
+
+        const existente = await pool.query(
+          'SELECT id FROM parcelamentos WHERE asaas_id = $1',
+          [parcelamentoDb.asaas_id]
+        )
+
+        if (existente.rows.length > 0) {
+          await pool.query(`
+            UPDATE parcelamentos SET
+              valor = $1, valor_liquido = $2, valor_parcela = $3,
+              numero_parcelas = $4, forma_pagamento = $5, data_pagamento = $6,
+              descricao = $7, dia_vencimento = $8, data_criacao_asaas = $9,
+              cliente_asaas_id = $10, payment_link = $11, checkout_session = $12,
+              url_comprovante = $13, cartao_ultimos_digitos = $14,
+              cartao_bandeira = $15, cartao_token = $16, deletado = $17
+            WHERE asaas_id = $18
+          `, [
+            parcelamentoDb.valor, parcelamentoDb.valor_liquido, parcelamentoDb.valor_parcela,
+            parcelamentoDb.numero_parcelas, parcelamentoDb.forma_pagamento, parcelamentoDb.data_pagamento,
+            parcelamentoDb.descricao, parcelamentoDb.dia_vencimento, parcelamentoDb.data_criacao_asaas,
+            parcelamentoDb.cliente_asaas_id, parcelamentoDb.payment_link, parcelamentoDb.checkout_session,
+            parcelamentoDb.url_comprovante, parcelamentoDb.cartao_ultimos_digitos,
+            parcelamentoDb.cartao_bandeira, parcelamentoDb.cartao_token, parcelamentoDb.deletado,
+            parcelamentoDb.asaas_id
+          ])
+          console.log(`  [ATUALIZADO] ${parcelamentoDb.asaas_id} - ${parcelamentoDb.descricao || 'sem descrição'}`)
+          totalAtualizados++
+        } else {
+          await pool.query(`
+            INSERT INTO parcelamentos (
+              asaas_id, valor, valor_liquido, valor_parcela, numero_parcelas,
+              forma_pagamento, data_pagamento, descricao, dia_vencimento,
+              data_criacao_asaas, cliente_asaas_id, payment_link, checkout_session,
+              url_comprovante, cartao_ultimos_digitos, cartao_bandeira,
+              cartao_token, deletado
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+              $14, $15, $16, $17, $18
+            )
+          `, [
+            parcelamentoDb.asaas_id, parcelamentoDb.valor, parcelamentoDb.valor_liquido,
+            parcelamentoDb.valor_parcela, parcelamentoDb.numero_parcelas, parcelamentoDb.forma_pagamento,
+            parcelamentoDb.data_pagamento, parcelamentoDb.descricao, parcelamentoDb.dia_vencimento,
+            parcelamentoDb.data_criacao_asaas, parcelamentoDb.cliente_asaas_id, parcelamentoDb.payment_link,
+            parcelamentoDb.checkout_session, parcelamentoDb.url_comprovante, parcelamentoDb.cartao_ultimos_digitos,
+            parcelamentoDb.cartao_bandeira, parcelamentoDb.cartao_token, parcelamentoDb.deletado
+          ])
+          console.log(`  [NOVO] ${parcelamentoDb.asaas_id} - ${parcelamentoDb.descricao || 'sem descrição'}`)
+          totalNovos++
+        }
+        totalSincronizados++
+        
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+
+      hasMore = dadosAsaas.hasMore
+      offset += limit
+
+      if (!cancelarSync && hasMore) {
+        console.log(`\n[PARCELAMENTOS] Progresso: ${totalSincronizados} | Novos: ${totalNovos} | Atualizados: ${totalAtualizados}`)
+        console.log('[PARCELAMENTOS] Aguardando 2 segundos...\n')
+        await new Promise(resolve => setTimeout(resolve, 2000))
+      }
+    }
+
+    if (cancelarSync) {
+      console.log('\n[PARCELAMENTOS] Sincronizacao cancelada')
+      console.log(`[PARCELAMENTOS] Processados ate cancelamento: ${totalSincronizados}`)
+    } else {
+      console.log('\n[PARCELAMENTOS] Sincronizacao concluida!')
+      console.log(`Total: ${totalSincronizados} | Novos: ${totalNovos} | Atualizados: ${totalAtualizados}\n`)
+    }
+  } catch (error) {
+    console.error('[PARCELAMENTOS] Erro na sincronizacao:', error.message)
+  } finally {
+    sincronizacaoAtiva = false
+    cancelarSync = false
+  }
+}
+
+// Sincronização de Cobranças
+function converterCobrancaAsaasParaDb(cobrancaAsaas) {
+  return {
+    asaas_id: cobrancaAsaas.id,
+    valor: cobrancaAsaas.value,
+    valor_liquido: cobrancaAsaas.netValue,
+    valor_original: cobrancaAsaas.originalValue,
+    valor_juros: cobrancaAsaas.interestValue,
+    descricao: cobrancaAsaas.description,
+    forma_pagamento: cobrancaAsaas.billingType,
+    status: cobrancaAsaas.status,
+    data_criacao_asaas: cobrancaAsaas.dateCreated,
+    data_vencimento: cobrancaAsaas.dueDate,
+    data_vencimento_original: cobrancaAsaas.originalDueDate,
+    data_pagamento: cobrancaAsaas.paymentDate,
+    data_pagamento_cliente: cobrancaAsaas.clientPaymentDate,
+    data_credito: cobrancaAsaas.creditDate,
+    data_credito_estimada: cobrancaAsaas.estimatedCreditDate,
+    cliente_asaas_id: cobrancaAsaas.customer,
+    assinatura_id: cobrancaAsaas.subscription,
+    parcelamento_id: cobrancaAsaas.installment,
+    numero_parcela: cobrancaAsaas.installmentNumber,
+    checkout_session: cobrancaAsaas.checkoutSession,
+    payment_link: cobrancaAsaas.paymentLink,
+    url_fatura: cobrancaAsaas.invoiceUrl,
+    numero_fatura: cobrancaAsaas.invoiceNumber,
+    referencia_externa: cobrancaAsaas.externalReference,
+    nosso_numero: cobrancaAsaas.nossoNumero,
+    url_boleto: cobrancaAsaas.bankSlipUrl,
+    pode_pagar_apos_vencimento: cobrancaAsaas.canBePaidAfterDueDate,
+    pix_transacao_id: cobrancaAsaas.pixTransaction,
+    pix_qrcode_id: cobrancaAsaas.pixQrCodeId,
+    cartao_ultimos_digitos: cobrancaAsaas.creditCard?.creditCardNumber,
+    cartao_bandeira: cobrancaAsaas.creditCard?.creditCardBrand,
+    cartao_token: cobrancaAsaas.creditCard?.creditCardToken,
+    url_comprovante: cobrancaAsaas.transactionReceiptUrl,
+    desconto_valor: cobrancaAsaas.discount?.value,
+    desconto_dias_limite: cobrancaAsaas.discount?.dueDateLimitDays,
+    desconto_tipo: cobrancaAsaas.discount?.type,
+    multa_percentual: cobrancaAsaas.fine?.value,
+    juros_percentual: cobrancaAsaas.interest?.value,
+    deletado: cobrancaAsaas.deleted || false,
+    antecipado: cobrancaAsaas.anticipated || false,
+    antecipavel: cobrancaAsaas.anticipable || false,
+    envio_correios: cobrancaAsaas.postalService || false,
+    dias_apos_vencimento_para_cancelamento: cobrancaAsaas.daysAfterDueDateToRegistrationCancellation
+  }
+}
+
+async function sincronizarCobrancas() {
+  if (sincronizacaoAtiva) {
+    console.log('[COBRANCAS] Sincronizacao ja em andamento')
+    return
+  }
+
+  sincronizacaoAtiva = true
+  cancelarSync = false
+  
+  let offset = 0
+  const limit = 50
+  let totalSincronizados = 0
+  let totalNovos = 0
+  let totalAtualizados = 0
+  let hasMore = true
+
+  console.log('\n[COBRANCAS] Iniciando sincronizacao...')
+  console.log('[COBRANCAS] Pressione qualquer tecla para cancelar\n')
+
+  try {
+    while (hasMore && !cancelarSync) {
+      console.log(`[COBRANCAS] Buscando no Asaas (offset: ${offset})...`)
+      const dadosAsaas = await listarCobrancasAsaas({ offset, limit })
+      console.log(`[COBRANCAS] Recebidas ${dadosAsaas.data.length} cobranças`)
+
+      for (const cobrancaAsaas of dadosAsaas.data) {
+        if (cancelarSync) break
+        
+        const cobrancaDb = converterCobrancaAsaasParaDb(cobrancaAsaas)
+
+        const existente = await pool.query(
+          'SELECT id FROM cobrancas WHERE asaas_id = $1',
+          [cobrancaDb.asaas_id]
+        )
+
+        if (existente.rows.length > 0) {
+          await pool.query(`
+            UPDATE cobrancas SET
+              valor = $1, valor_liquido = $2, valor_original = $3, valor_juros = $4,
+              descricao = $5, forma_pagamento = $6, status = $7, data_criacao_asaas = $8,
+              data_vencimento = $9, data_vencimento_original = $10, data_pagamento = $11,
+              data_pagamento_cliente = $12, data_credito = $13, data_credito_estimada = $14,
+              cliente_asaas_id = $15, assinatura_id = $16, parcelamento_id = $17,
+              numero_parcela = $18, checkout_session = $19, payment_link = $20,
+              url_fatura = $21, numero_fatura = $22, referencia_externa = $23,
+              nosso_numero = $24, url_boleto = $25, pode_pagar_apos_vencimento = $26,
+              pix_transacao_id = $27, pix_qrcode_id = $28, cartao_ultimos_digitos = $29,
+              cartao_bandeira = $30, cartao_token = $31, url_comprovante = $32,
+              desconto_valor = $33, desconto_dias_limite = $34, desconto_tipo = $35,
+              multa_percentual = $36, juros_percentual = $37, deletado = $38,
+              antecipado = $39, antecipavel = $40, envio_correios = $41,
+              dias_apos_vencimento_para_cancelamento = $42
+            WHERE asaas_id = $43
+          `, [
+            cobrancaDb.valor, cobrancaDb.valor_liquido, cobrancaDb.valor_original, cobrancaDb.valor_juros,
+            cobrancaDb.descricao, cobrancaDb.forma_pagamento, cobrancaDb.status, cobrancaDb.data_criacao_asaas,
+            cobrancaDb.data_vencimento, cobrancaDb.data_vencimento_original, cobrancaDb.data_pagamento,
+            cobrancaDb.data_pagamento_cliente, cobrancaDb.data_credito, cobrancaDb.data_credito_estimada,
+            cobrancaDb.cliente_asaas_id, cobrancaDb.assinatura_id, cobrancaDb.parcelamento_id,
+            cobrancaDb.numero_parcela, cobrancaDb.checkout_session, cobrancaDb.payment_link,
+            cobrancaDb.url_fatura, cobrancaDb.numero_fatura, cobrancaDb.referencia_externa,
+            cobrancaDb.nosso_numero, cobrancaDb.url_boleto, cobrancaDb.pode_pagar_apos_vencimento,
+            cobrancaDb.pix_transacao_id, cobrancaDb.pix_qrcode_id, cobrancaDb.cartao_ultimos_digitos,
+            cobrancaDb.cartao_bandeira, cobrancaDb.cartao_token, cobrancaDb.url_comprovante,
+            cobrancaDb.desconto_valor, cobrancaDb.desconto_dias_limite, cobrancaDb.desconto_tipo,
+            cobrancaDb.multa_percentual, cobrancaDb.juros_percentual, cobrancaDb.deletado,
+            cobrancaDb.antecipado, cobrancaDb.antecipavel, cobrancaDb.envio_correios,
+            cobrancaDb.dias_apos_vencimento_para_cancelamento,
+            cobrancaDb.asaas_id
+          ])
+          console.log(`  [ATUALIZADO] ${cobrancaDb.asaas_id} - ${cobrancaDb.status} - R$ ${cobrancaDb.valor}`)
+          totalAtualizados++
+        } else {
+          await pool.query(`
+            INSERT INTO cobrancas (
+              asaas_id, valor, valor_liquido, valor_original, valor_juros,
+              descricao, forma_pagamento, status, data_criacao_asaas,
+              data_vencimento, data_vencimento_original, data_pagamento,
+              data_pagamento_cliente, data_credito, data_credito_estimada,
+              cliente_asaas_id, assinatura_id, parcelamento_id, numero_parcela,
+              checkout_session, payment_link, url_fatura, numero_fatura,
+              referencia_externa, nosso_numero, url_boleto, pode_pagar_apos_vencimento,
+              pix_transacao_id, pix_qrcode_id, cartao_ultimos_digitos,
+              cartao_bandeira, cartao_token, url_comprovante, desconto_valor,
+              desconto_dias_limite, desconto_tipo, multa_percentual, juros_percentual,
+              deletado, antecipado, antecipavel, envio_correios,
+              dias_apos_vencimento_para_cancelamento
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+              $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28,
+              $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43
+            )
+          `, [
+            cobrancaDb.asaas_id, cobrancaDb.valor, cobrancaDb.valor_liquido, cobrancaDb.valor_original,
+            cobrancaDb.valor_juros, cobrancaDb.descricao, cobrancaDb.forma_pagamento, cobrancaDb.status,
+            cobrancaDb.data_criacao_asaas, cobrancaDb.data_vencimento, cobrancaDb.data_vencimento_original,
+            cobrancaDb.data_pagamento, cobrancaDb.data_pagamento_cliente, cobrancaDb.data_credito,
+            cobrancaDb.data_credito_estimada, cobrancaDb.cliente_asaas_id, cobrancaDb.assinatura_id,
+            cobrancaDb.parcelamento_id, cobrancaDb.numero_parcela, cobrancaDb.checkout_session,
+            cobrancaDb.payment_link, cobrancaDb.url_fatura, cobrancaDb.numero_fatura,
+            cobrancaDb.referencia_externa, cobrancaDb.nosso_numero, cobrancaDb.url_boleto,
+            cobrancaDb.pode_pagar_apos_vencimento, cobrancaDb.pix_transacao_id, cobrancaDb.pix_qrcode_id,
+            cobrancaDb.cartao_ultimos_digitos, cobrancaDb.cartao_bandeira, cobrancaDb.cartao_token,
+            cobrancaDb.url_comprovante, cobrancaDb.desconto_valor, cobrancaDb.desconto_dias_limite,
+            cobrancaDb.desconto_tipo, cobrancaDb.multa_percentual, cobrancaDb.juros_percentual,
+            cobrancaDb.deletado, cobrancaDb.antecipado, cobrancaDb.antecipavel, cobrancaDb.envio_correios,
+            cobrancaDb.dias_apos_vencimento_para_cancelamento
+          ])
+          console.log(`  [NOVO] ${cobrancaDb.asaas_id} - ${cobrancaDb.status} - R$ ${cobrancaDb.valor}`)
+          totalNovos++
+        }
+        totalSincronizados++
+        
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+
+      hasMore = dadosAsaas.hasMore
+      offset += limit
+
+      if (!cancelarSync && hasMore) {
+        console.log(`\n[COBRANCAS] Progresso: ${totalSincronizados} | Novos: ${totalNovos} | Atualizados: ${totalAtualizados}`)
+        console.log('[COBRANCAS] Aguardando 2 segundos...\n')
+        await new Promise(resolve => setTimeout(resolve, 2000))
+      }
+    }
+
+    if (cancelarSync) {
+      console.log('\n[COBRANCAS] Sincronizacao cancelada')
+      console.log(`[COBRANCAS] Processados ate cancelamento: ${totalSincronizados}`)
+    } else {
+      console.log('\n[COBRANCAS] Sincronizacao concluida!')
+      console.log(`Total: ${totalSincronizados} | Novos: ${totalNovos} | Atualizados: ${totalAtualizados}\n`)
+    }
+  } catch (error) {
+    console.error('[COBRANCAS] Erro na sincronizacao:', error.message)
+  } finally {
+    sincronizacaoAtiva = false
+    cancelarSync = false
+  }
+}
+
+// Função para executar todas as sincronizações em sequência
+async function sincronizarTudo() {
+  console.log('\n[INFO] SINCRONIZACAO COMPLETA - INICIANDO\n')
+  
+  // 1. Sincronizar clientes
+  await sincronizarClientes()
+  
+  if (cancelarSync) {
+    console.log('\n[INFO] Sincronizacao geral cancelada pelo usuario')
+    return
+  }
+  
+  // 2. Aguardar 10 segundos e sincronizar parcelamentos
+  console.log('\n[INFO] Aguardando 10 segundos para sincronizar parcelamentos...\n')
+  await new Promise(resolve => setTimeout(resolve, 10000))
+  
+  if (cancelarSync) {
+    console.log('\n[INFO] Sincronizacao geral cancelada pelo usuario')
+    return
+  }
+  
+  await sincronizarParcelamentos()
+  
+  if (cancelarSync) {
+    console.log('\n[INFO] Sincronizacao geral cancelada pelo usuario')
+    return
+  }
+  
+  // 3. Aguardar 10 segundos e sincronizar cobranças
+  console.log('\n[INFO] Aguardando 10 segundos para sincronizar cobrancas...\n')
+  await new Promise(resolve => setTimeout(resolve, 10000))
+  
+  if (cancelarSync) {
+    console.log('\n[INFO] Sincronizacao geral cancelada pelo usuario')
+    return
+  }
+  
+  await sincronizarCobrancas()
+  
+  console.log('\n[INFO] SINCRONIZACAO COMPLETA - FINALIZADA\n')
+}
+
 // ====================
 // ROTAS
 // ====================
 
 // Importar rotas
 const clientesRoutes = require('./routes/clientes')
+const parcelamentosRoutes = require('./routes/parcelamentos')
+const cobrancasRoutes = require('./routes/cobrancas')
+const authRoutes = require('./routes/auth')
 
-// Usar rotas
-app.use('/api/clientes', clientesRoutes)
+/**
+ * @swagger
+ * /:
+ *   get:
+ *     summary: Informações da API
+ *     description: Retorna informações básicas da API e endpoints disponíveis
+ *     tags: [Sistema]
+ *     responses:
+ *       200:
+ *         description: Informações da API retornadas com sucesso
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "AgroServer API - Sistema Agrícola"
+ *                 version:
+ *                   type: string
+ *                   example: "1.0.0"
+ *                 endpoints:
+ *                   type: object
+ *                   properties:
+ *                     health:
+ *                       type: string
+ *                       example: "/health"
+ *                     auth:
+ *                       type: string
+ *                       example: "/api/auth"
+ *                     clientes:
+ *                       type: string
+ *                       example: "/api/clientes"
+ *                     parcelamentos:
+ *                       type: string
+ *                       example: "/api/parcelamentos"
+ *                     cobrancas:
+ *                       type: string
+ *                       example: "/api/cobrancas"
+ *                     docs:
+ *                       type: string
+ *                       example: "/api-docs"
+ */
 app.get('/', (req, res) => {
   res.json({
     message: 'AgroServer API - Sistema Agrícola',
     version: '1.0.0',
     endpoints: {
       health: '/health',
-      api: '/api'
+      auth: '/api/auth',
+      clientes: '/api/clientes',
+      parcelamentos: '/api/parcelamentos',
+      cobrancas: '/api/cobrancas',
+      docs: '/api-docs'
     }
   })
 })
 
-// Exemplo de rota API
+/**
+ * @swagger
+ * /api/exemplo:
+ *   get:
+ *     summary: Exemplo de endpoint da API
+ *     description: Endpoint de teste que retorna informações do PostgreSQL
+ *     tags: [Sistema]
+ *     responses:
+ *       200:
+ *         description: Resposta de exemplo com versão do PostgreSQL
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Endpoint de exemplo funcionando"
+ *                 pg_version:
+ *                   type: string
+ *                   example: "PostgreSQL 16.0"
+ *       500:
+ *         description: Erro interno do servidor
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 app.get('/api/exemplo', async (req, res) => {
   try {
     // Exemplo de consulta simples
@@ -246,6 +717,12 @@ app.get('/api/exemplo', async (req, res) => {
     })
   }
 })
+
+// Registrar rotas
+app.use('/api/auth', authRoutes)
+app.use('/api/clientes', clientesRoutes)
+app.use('/api/parcelamentos', parcelamentosRoutes)
+app.use('/api/cobrancas', cobrancasRoutes)
 
 // Tratamento de rotas não encontradas
 app.use((req, res) => {
@@ -264,14 +741,54 @@ app.use((err, req, res, next) => {
   })
 })
 
+// Função para selecionar ambiente
+function selecionarAmbiente() {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    })
+
+    console.log('\n[AMBIENTE] Selecione o ambiente de execucao:')
+    console.log('[1] Desenvolvimento (localhost)')
+    console.log('[2] Producao (agrosystemapp.com)\n')
+
+    rl.question('Digite 1 ou 2: ', (resposta) => {
+      rl.close()
+      
+      if (resposta.trim() === '2') {
+        AMBIENTE = 'prod'
+        BASE_URL = process.env.PROD_URL || 'https://agrosystemapp.com'
+        process.env.NODE_ENV = 'production'
+      } else {
+        AMBIENTE = 'dev'
+        BASE_URL = `http://localhost:${PORT}`
+        process.env.NODE_ENV = 'development'
+      }
+      
+      resolve()
+    })
+  })
+}
+
 // Iniciar servidor
-app.listen(PORT, async () => {
-  console.log('\n========================================')
-  console.log('AGROSERVER API - INICIANDO')
-  console.log('========================================\n')
+async function iniciarServidor() {
+  // Selecionar ambiente
+  await selecionarAmbiente()
   
-  console.log(`[SERVER] Rodando em http://localhost:${PORT}`)
-  console.log(`[SERVER] Modo: ${process.env.NODE_ENV || 'development'}`)
+  // Configurar Swagger dinamicamente baseado no ambiente
+  const swaggerSpec = gerarSwaggerSpec(AMBIENTE, BASE_URL)
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+    customCss: '.swagger-ui .topbar { display: none }',
+    customSiteTitle: 'AgroServer API Documentation'
+  }))
+  
+  app.listen(PORT, async () => {
+    console.log('\n[SERVER] AGROSERVER API - INICIANDO\n')
+    
+    console.log(`[SERVER] Ambiente: ${AMBIENTE.toUpperCase()}`)
+    console.log(`[SERVER] URL Base: ${BASE_URL}`)
+    console.log(`[SERVER] Porta: ${PORT}`)
   
   // 1. Verificar conexão com banco
   try {
@@ -294,15 +811,30 @@ app.listen(PORT, async () => {
     process.exit(1)
   }
   
-  console.log('\n========================================')
-  console.log('[OK] Servidor pronto!')
-  console.log('========================================\n')
+  console.log('\n[OK] Servidor pronto!\n')
+  console.log(`[SWAGGER] Documentacao da API: ${BASE_URL}/api-docs\n`)
   
-  // 3. Aguardar 15 segundos e iniciar sincronização
-  console.log('[INFO] Sincronizacao automatica iniciara em 15 segundos...')
-  console.log('[INFO] Pressione Ctrl+C para encerrar o servidor\n')
+  // 3. Perguntar se deseja sincronizar
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  })
   
-  setTimeout(() => {
-    sincronizarClientes()
-  }, 15000)
-})
+  rl.question('[SYNC] Deseja iniciar sincronizacao completa? (S/N): ', (resposta) => {
+    rl.close()
+    
+    if (resposta.trim().toLowerCase() === 's' || resposta.trim().toLowerCase() === 'sim') {
+      console.log('\n[INFO] Iniciando sincronizacao completa...')
+      console.log('[INFO] Pressione qualquer tecla para cancelar sincronizacao')
+      console.log('[INFO] Pressione Ctrl+C para encerrar o servidor\n')
+      sincronizarTudo()
+    } else {
+      console.log('\n[INFO] Sincronizacao nao sera executada')
+      console.log('[INFO] Pressione Ctrl+C para encerrar o servidor\n')
+    }
+  })
+  })
+}
+
+// Iniciar aplicação
+iniciarServidor()

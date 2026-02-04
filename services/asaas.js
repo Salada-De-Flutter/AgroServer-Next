@@ -63,10 +63,66 @@ async function deletarClienteAsaas(asaasId) {
   }
 }
 
+// ==========================================
+// PARCELAMENTOS (INSTALLMENTS)
+// ==========================================
+
+// Listar parcelamentos da API Asaas
+async function listarParcelamentosAsaas(params = {}) {
+  try {
+    const response = await asaasApi.get('/installments', { params });
+    return response.data;
+  } catch (error) {
+    console.error('[ASAAS] Erro ao listar parcelamentos:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+// Buscar parcelamento específico no Asaas
+async function buscarParcelamentoAsaas(asaasId) {
+  try {
+    const response = await asaasApi.get(`/installments/${asaasId}`);
+    return response.data;
+  } catch (error) {
+    console.error(`[ASAAS] Erro ao buscar parcelamento ${asaasId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
+// ==========================================
+// COBRANÇAS (PAYMENTS)
+// ==========================================
+
+// Listar cobranças da API Asaas
+async function listarCobrancasAsaas(params = {}) {
+  try {
+    const response = await asaasApi.get('/payments', { params });
+    return response.data;
+  } catch (error) {
+    console.error('[ASAAS] Erro ao listar cobranças:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+// Buscar cobrança específica no Asaas
+async function buscarCobrancaAsaas(asaasId) {
+  try {
+    const response = await asaasApi.get(`/payments/${asaasId}`);
+    return response.data;
+  } catch (error) {
+    console.error(`[ASAAS] Erro ao buscar cobrança ${asaasId}:`, error.response?.data || error.message);
+    throw error;
+  }
+}
+
 module.exports = {
   listarClientesAsaas,
   buscarClienteAsaas,
   criarClienteAsaas,
   atualizarClienteAsaas,
-  deletarClienteAsaas
+  deletarClienteAsaas,
+  listarParcelamentosAsaas,
+  buscarParcelamentoAsaas,
+  listarCobrancasAsaas,
+  buscarCobrancaAsaas
 };
