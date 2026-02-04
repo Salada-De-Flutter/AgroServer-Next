@@ -726,6 +726,13 @@ app.use('/api/clientes', clientesRoutes)
 app.use('/api/parcelamentos', parcelamentosRoutes)
 app.use('/api/cobrancas', cobrancasRoutes)
 
+// Configurar Swagger dinamicamente baseado no ambiente
+const swaggerSpec = gerarSwaggerSpec(AMBIENTE === 'production' ? 'prod' : 'dev', BASE_URL)
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: 'AgroServer API Documentation'
+}))
+
 // Tratamento de rotas não encontradas
 app.use((req, res) => {
   res.status(404).json({
@@ -745,16 +752,6 @@ app.use((err, req, res, next) => {
 
 // Iniciar servidor
 async function iniciarServidor() {
-  // Configurar Swagger dinamicamente baseado no ambiente
-  const swaggerSpec = gerarSwaggerSpec(AMBIENTE === 'production' ? 'prod' : 'dev', BASE_URL)
-  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-    customCss: '.swagger-ui .topbar { display: none }',
-    customSiteTitle: 'AgroServer API Documentation'
-  }))
-  
-  // Log de debug para confirmar rota registrada
-  console.log('[DEBUG] Rota /api-docs registrada')
-  
   app.listen(PORT, async () => {
     console.log('\n[SERVER] AGROSERVER API - INICIANDO\n')
     
