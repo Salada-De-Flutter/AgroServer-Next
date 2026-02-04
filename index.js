@@ -752,12 +752,16 @@ async function iniciarServidor() {
     customSiteTitle: 'AgroServer API Documentation'
   }))
   
+  // Log de debug para confirmar rota registrada
+  console.log('[DEBUG] Rota /api-docs registrada')
+  
   app.listen(PORT, async () => {
     console.log('\n[SERVER] AGROSERVER API - INICIANDO\n')
     
     console.log(`[SERVER] Ambiente: ${AMBIENTE.toUpperCase()}`)
     console.log(`[SERVER] URL Base: ${BASE_URL}`)
     console.log(`[SERVER] Porta: ${PORT}`)
+    console.log(`[SERVER] Escutando em: http://localhost:${PORT}`)
   
   // 1. Verificar conexão com banco
   try {
