@@ -570,4 +570,131 @@ router.get('/:id/pdf', verificarToken, async (req, res) => {
   }
 });
 
+// ---
+// API - Envio de Código de Verificação de Venda
+// ---
+/**
+ * @swagger
+ * /api/vendas/enviar-codigo-verificacao:
+ *   post:
+ *     summary: Enviar código de verificação de venda para o cliente
+ *     tags: [Vendas]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - clienteId
+ *               - clienteNome
+ *               - clienteTelefone
+ *               - nomeVendedor
+ *               - codigoVerificacao
+ *               - metodo
+ *               - valor
+ *               - tipoVenda
+ *             properties:
+ *               clienteId:
+ *                 type: string
+ *               clienteNome:
+ *                 type: string
+ *               clienteTelefone:
+ *                 type: string
+ *               nomeVendedor:
+ *                 type: string
+ *               codigoVerificacao:
+ *                 type: string
+ *               metodo:
+ *                 type: string
+ *                 enum: [whatsapp, sms]
+ *               valor:
+ *                 type: string
+ *               tipoVenda:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Código enviado com sucesso
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 sucesso:
+ *                   type: boolean
+ *                 mensagem:
+ *                   type: string
+ *       400:
+ *         description: Campos obrigatórios faltando
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 sucesso:
+ *                   type: boolean
+ *                 mensagem:
+ *                   type: string
+ *       500:
+ *         description: Erro ao enviar código
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 sucesso:
+ *                   type: boolean
+ *                 mensagem:
+ *                   type: string
+ */
+router.post('/enviar-codigo-verificacao', async (req, res) => {
+  const {
+    clienteId,
+    clienteNome,
+    clienteTelefone,
+    nomeVendedor,
+    codigoVerificacao,
+    metodo,
+    valor,
+    tipoVenda
+  } = req.body;
+
+  // Validação básica
+  if (!clienteId || !clienteNome || !clienteTelefone || !nomeVendedor || !codigoVerificacao || !metodo || !valor || !tipoVenda) {
+    return res.status(400).json({
+      sucesso: false,
+      mensagem: 'Campos obrigatórios faltando'
+    });
+  }
+
+  // Montar mensagem
+  const mensagem = `Olá ${clienteNome}!\n\nSua venda foi registrada com sucesso.\n\nCódigo de verificação: ${codigoVerificacao}\nValor: R$ ${valor}\nTipo: ${tipoVenda}\nVendedor: ${nomeVendedor}\n\nUse este código para confirmar sua venda.`;
+
+  // Enviar via API local Go
+  try {
+    const response = await axios.post('http://localhost:8080/enviar-mensagem', {
+      mensagem,
+      numero: clienteTelefone
+    });
+
+    if (response.status === 200) {
+      return res.json({
+        sucesso: true,
+        mensagem: 'Código enviado com sucesso'
+      });
+    } else {
+      return res.status(500).json({
+        sucesso: false,
+        mensagem: 'Erro ao enviar código'
+      });
+    }
+  } catch (error) {
+    console.error('[VENDA-VERIFICACAO] Erro ao enviar código:', error.message);
+    return res.status(500).json({
+      sucesso: false,
+      mensagem: 'Erro ao enviar código'
+    });
+  }
+});
+
 module.exports = router;
