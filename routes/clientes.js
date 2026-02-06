@@ -390,7 +390,8 @@ router.post('/', verificarToken, upload.single('fotoDocumento'), async (req, res
       cpfCnpj: documentoLimpo,
       phone: telefoneLimpo,
       mobilePhone: telefoneLimpo,
-      complement: endereco
+      complement: endereco,
+      notificationDisabled: true
     };
     
     try {

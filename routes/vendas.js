@@ -238,7 +238,8 @@ router.post('/', verificarToken, upload.single('fotoFicha'), async (req, res) =>
         installmentCount: numeroParcelas,
         installmentValue: valorParcela,
         description: descricao,
-        externalReference: `FICHA-${numeroFicha}`
+        externalReference: `FICHA-${numeroFicha}`,
+        notificationDisabled: true
       });
       
       parcelamentoAsaas = parcelamentoResponse.data;
@@ -298,6 +299,7 @@ router.post('/', verificarToken, upload.single('fotoFicha'), async (req, res) =>
     let cobrancasLocais = [];
     
     try {
+      const pool = req.app.locals.pool;
       const dbClient = await pool.connect();
       
       try {
@@ -401,6 +403,7 @@ router.post('/', verificarToken, upload.single('fotoFicha'), async (req, res) =>
     res.json({
       sucesso: true,
       mensagem: 'Venda parcelada cadastrada com sucesso',
+      vendaId: parcelamentoLocalId, // ID para uso no frontend
       venda: {
         id: parcelamentoLocalId,
         clienteId: parseInt(clienteId),
@@ -456,6 +459,115 @@ router.use((error, req, res, next) => {
     });
   }
   next();
+});
+
+/**
+ * @swagger
+ * /api/vendas/{id}/pdf:
+ *   get:
+ *     summary: Baixar PDF do carnê de parcelamento
+ *     tags: [Vendas]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID do parcelamento no banco de dados local
+ *     responses:
+ *       200:
+ *         description: PDF do carnê de parcelamento
+ *         content:
+ *           application/pdf:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       404:
+ *         description: Parcelamento não encontrado
+ *       500:
+ *         description: Erro ao buscar PDF
+ */
+router.get('/:id/pdf', verificarToken, async (req, res) => {
+  const { id } = req.params;
+  
+  console.log(`[VENDA-PDF] Buscando PDF do parcelamento ID: ${id}`);
+  
+  try {
+    // 1️⃣ BUSCAR PARCELAMENTO NO BANCO LOCAL
+    const pool = req.app.locals.pool;
+    const dbClient = await pool.connect();
+    
+    let parcelamento;
+    try {
+      const result = await dbClient.query(
+        'SELECT id, asaas_id, valor, numero_parcelas, cliente_asaas_id FROM parcelamentos WHERE id = $1 AND deletado = false',
+        [id]
+      );
+      
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          sucesso: false,
+          mensagem: 'Parcelamento não encontrado'
+        });
+      }
+      
+      parcelamento = result.rows[0];
+      console.log(`[VENDA-PDF] Parcelamento encontrado - Asaas ID: ${parcelamento.asaas_id}`);
+      
+    } finally {
+      dbClient.release();
+    }
+    
+    // 2️⃣ BUSCAR PDF DO CARNÊ NO ASAAS
+    console.log('[VENDA-PDF] Buscando PDF do carnê no Asaas...');
+    
+    const asaasApi = axios.create({
+      baseURL: process.env.ASAAS_BASE_URL || 'https://api.asaas.com/v3',
+      headers: {
+        'access_token': process.env.ASAAS_API_KEY
+      },
+      responseType: 'stream' // Importante: receber como stream
+    });
+    
+    try {
+      // Endpoint do Asaas para gerar carnê de parcelamento
+      const pdfResponse = await asaasApi.get(`/installments/${parcelamento.asaas_id}/paymentBook`);
+      
+      console.log('[VENDA-PDF] ✅ PDF obtido do Asaas, enviando para cliente...');
+      
+      // 3️⃣ ENVIAR PDF PARA O CLIENTE
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="carne_parcelamento_${id}.pdf"`);
+      
+      // Fazer pipe do stream do Asaas direto para a resposta
+      pdfResponse.data.pipe(res);
+      
+    } catch (asaasError) {
+      console.error('[VENDA-PDF] ❌ Erro ao buscar PDF no Asaas:', asaasError.response?.data || asaasError.message);
+      
+      // Se o Asaas retornar erro, tentar gerar os boletos individuais
+      if (asaasError.response?.status === 404) {
+        return res.status(404).json({
+          sucesso: false,
+          mensagem: 'Carnê não disponível no Asaas. O parcelamento pode não ter sido criado corretamente.'
+        });
+      }
+      
+      return res.status(500).json({
+        sucesso: false,
+        mensagem: 'Erro ao buscar carnê no Asaas. Tente novamente mais tarde.'
+      });
+    }
+    
+  } catch (error) {
+    console.error('[VENDA-PDF] ❌ Erro geral:', error.message);
+    res.status(500).json({
+      sucesso: false,
+      mensagem: 'Erro ao processar solicitação'
+    });
+  }
 });
 
 module.exports = router;
