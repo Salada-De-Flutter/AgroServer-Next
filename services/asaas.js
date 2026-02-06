@@ -35,6 +35,21 @@ async function buscarClienteAsaas(asaasId) {
   }
 }
 
+// Buscar cliente por CPF/CNPJ no Asaas
+async function buscarClientePorCpfAsaas(cpfCnpj) {
+  try {
+    const asaasApi = criarAsaasApi();
+    const response = await asaasApi.get('/customers', {
+      params: { cpfCnpj: cpfCnpj }
+    });
+    // Retorna o primeiro cliente encontrado ou null
+    return response.data.data && response.data.data.length > 0 ? response.data.data[0] : null;
+  } catch (error) {
+    console.error('[ASAAS] Erro ao buscar cliente por CPF:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
 // Criar cliente no Asaas
 async function criarClienteAsaas(dadosCliente) {
   try {
@@ -130,6 +145,7 @@ async function buscarCobrancaAsaas(asaasId) {
 module.exports = {
   listarClientesAsaas,
   buscarClienteAsaas,
+  buscarClientePorCpfAsaas,
   criarClienteAsaas,
   atualizarClienteAsaas,
   deletarClienteAsaas,
