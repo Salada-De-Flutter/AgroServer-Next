@@ -1,7 +1,5 @@
-// Carregar variáveis de ambiente baseado em NODE_ENV
-const path = require('path')
-const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.development'
-require('dotenv').config({ path: path.resolve(__dirname, envFile) })
+// Carregar variáveis de ambiente
+require('dotenv').config()
 
 const express = require('express')
 const cors = require('cors')
@@ -13,8 +11,10 @@ const readline = require('readline')
 
 const app = express()
 const PORT = process.env.PORT || 3000
-const BASE_URL = process.env.API_URL || `http://localhost:${PORT}`
 const AMBIENTE = process.env.NODE_ENV || 'development'
+const BASE_URL = AMBIENTE === 'production' 
+  ? (process.env.PROD_API_URL || 'https://api.agrosystemapp.com') 
+  : `http://localhost:${PORT}`
 
 // Middlewares
 app.use(cors())

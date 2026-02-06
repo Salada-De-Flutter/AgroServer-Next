@@ -1,16 +1,20 @@
 const axios = require('axios');
 
-const asaasApi = axios.create({
-  baseURL: process.env.ASAAS_BASE_URL || 'https://api.asaas.com/v3',
-  headers: {
-    'access_token': process.env.ASAAS_API_KEY,
-    'Content-Type': 'application/json'
-  }
-});
+// Função para criar instância do axios com a chave atual
+function criarAsaasApi() {
+  return axios.create({
+    baseURL: process.env.ASAAS_BASE_URL || 'https://api.asaas.com/v3',
+    headers: {
+      'access_token': process.env.ASAAS_API_KEY,
+      'Content-Type': 'application/json'
+    }
+  });
+}
 
 // Listar clientes da API Asaas
 async function listarClientesAsaas(params = {}) {
   try {
+    const asaasApi = criarAsaasApi();
     const response = await asaasApi.get('/customers', { params });
     return response.data;
   } catch (error) {
@@ -22,6 +26,7 @@ async function listarClientesAsaas(params = {}) {
 // Buscar cliente específico no Asaas
 async function buscarClienteAsaas(asaasId) {
   try {
+    const asaasApi = criarAsaasApi();
     const response = await asaasApi.get(`/customers/${asaasId}`);
     return response.data;
   } catch (error) {
@@ -33,6 +38,7 @@ async function buscarClienteAsaas(asaasId) {
 // Criar cliente no Asaas
 async function criarClienteAsaas(dadosCliente) {
   try {
+    const asaasApi = criarAsaasApi();
     const response = await asaasApi.post('/customers', dadosCliente);
     return response.data;
   } catch (error) {
@@ -44,6 +50,7 @@ async function criarClienteAsaas(dadosCliente) {
 // Atualizar cliente no Asaas
 async function atualizarClienteAsaas(asaasId, dadosCliente) {
   try {
+    const asaasApi = criarAsaasApi();
     const response = await asaasApi.put(`/customers/${asaasId}`, dadosCliente);
     return response.data;
   } catch (error) {
@@ -55,6 +62,7 @@ async function atualizarClienteAsaas(asaasId, dadosCliente) {
 // Deletar cliente no Asaas
 async function deletarClienteAsaas(asaasId) {
   try {
+    const asaasApi = criarAsaasApi();
     const response = await asaasApi.delete(`/customers/${asaasId}`);
     return response.data;
   } catch (error) {
@@ -70,6 +78,7 @@ async function deletarClienteAsaas(asaasId) {
 // Listar parcelamentos da API Asaas
 async function listarParcelamentosAsaas(params = {}) {
   try {
+    const asaasApi = criarAsaasApi();
     const response = await asaasApi.get('/installments', { params });
     return response.data;
   } catch (error) {
@@ -81,6 +90,7 @@ async function listarParcelamentosAsaas(params = {}) {
 // Buscar parcelamento específico no Asaas
 async function buscarParcelamentoAsaas(asaasId) {
   try {
+    const asaasApi = criarAsaasApi();
     const response = await asaasApi.get(`/installments/${asaasId}`);
     return response.data;
   } catch (error) {
@@ -96,6 +106,7 @@ async function buscarParcelamentoAsaas(asaasId) {
 // Listar cobranças da API Asaas
 async function listarCobrancasAsaas(params = {}) {
   try {
+    const asaasApi = criarAsaasApi();
     const response = await asaasApi.get('/payments', { params });
     return response.data;
   } catch (error) {
@@ -107,6 +118,7 @@ async function listarCobrancasAsaas(params = {}) {
 // Buscar cobrança específica no Asaas
 async function buscarCobrancaAsaas(asaasId) {
   try {
+    const asaasApi = criarAsaasApi();
     const response = await asaasApi.get(`/payments/${asaasId}`);
     return response.data;
   } catch (error) {
