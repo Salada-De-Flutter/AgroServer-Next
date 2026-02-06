@@ -19,6 +19,7 @@ const BASE_URL = AMBIENTE === 'production'
 // Middlewares
 app.use(cors())
 app.use(express.json())
+app.use('/uploads', express.static('uploads')) // Servir arquivos estáticos
 
 // Configuração do banco de dados PostgreSQL
 const pool = new Pool({
@@ -617,6 +618,7 @@ const clientesRoutes = require('./routes/clientes')
 const parcelamentosRoutes = require('./routes/parcelamentos')
 const cobrancasRoutes = require('./routes/cobrancas')
 const authRoutes = require('./routes/auth')
+const vendasRoutes = require('./routes/vendas')
 
 /**
  * @swagger
@@ -725,6 +727,7 @@ app.use('/api/auth', authRoutes)
 app.use('/api/clientes', clientesRoutes)
 app.use('/api/parcelamentos', parcelamentosRoutes)
 app.use('/api/cobrancas', cobrancasRoutes)
+app.use('/api/vendas', vendasRoutes)
 
 // Configurar Swagger dinamicamente baseado no ambiente
 const swaggerSpec = gerarSwaggerSpec(AMBIENTE === 'production' ? 'prod' : 'dev', BASE_URL)

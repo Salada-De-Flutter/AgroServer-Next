@@ -31,3 +31,9 @@ build/
 # Temporários
 tmp/
 temp/
+
+# Uploads (ignorar arquivos mas manter as pastas)
+uploads/documentos/*
+!uploads/documentos/.gitkeep
+uploads/fichas/*
+!uploads/fichas/.gitkeep
